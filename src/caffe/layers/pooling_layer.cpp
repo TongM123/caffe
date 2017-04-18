@@ -253,10 +253,12 @@ void PoolingLayer<Dtype>::Forward_cpu(const vector<Blob<Dtype>*>& bottom,
   }
 }
 
+
 template <>
 void PoolingLayer<float>::Forward_cpu(const vector<Blob<float>*>& bottom,
       const vector<Blob<float>*>& top) {
-  const float* bottom_data = bottom[0]->cpu_data();
+  //const float* bottom_data = bottom[0]->cpu_data();
+  float* bottom_data = (float*)bottom[0]->cpu_data();
   float* top_data = top[0]->mutable_cpu_data();
   const int top_count = top[0]->count();
   // We'll output the mask to top[1] if it's of size >1.
@@ -290,23 +292,6 @@ void PoolingLayer<float>::Forward_cpu(const vector<Blob<float>*>& bottom,
       optimal_version = 1;
 	
 	
-	/*const int pooled_width_const = this->pooled_width_;
-	const int pooled_height_const = this->pooled_height_;
-	const int width_const = this->width_;
-	const int height_const = this->height_;
-	
-	const int pooled_fm_size = this->pooled_height_ * this->pooled_width_;
-    const int fm_size = this->height_ * this->width_;
-
-    const int pooled_batch_size = pooled_fm_size * this->channels_;
-    const int batch_size = fm_size * this->channels_;
-
-    const int height_kernel_h_ = this->height_ - this->kernel_h_;
-    const int width_kernel_w_ = this->width_ - this->kernel_w_;
-
-    const int height_kernel_h_pad_h_ = height_kernel_h_ + this->pad_h_;
-    const int width_kernel_w_pad_w_ = width_kernel_w_ + this->pad_w_;*/
-	
 	//存放参数，方便传递给inline assembly
 	int param[30];
 	param[0] = pooled_width_;//0
@@ -314,17 +299,17 @@ void PoolingLayer<float>::Forward_cpu(const vector<Blob<float>*>& bottom,
 	param[2] = width_;//8
 	param[3] = height_;//12
 	
-	param[4] = param[1] * param[0];//pooled_fm_size 16
-    param[5] = param[3] * param[2];//fm_size 20
+	param[4] = param[1] * param[0];//pooled_fm_size 16  = this->pooled_height_ * this->pooled_width_;
+    param[5] = param[3] * param[2];//fm_size 20 = this->height_ * this->width_;
 
-    param[6] = param[4] * channels_;//pooled_batch_size 24
-    param[7] = param[5] * channels_;//batch_size 28
+    param[6] = param[4] * channels_;//pooled_batch_size 24 = pooled_fm_size * this->channels_;
+    param[7] = param[5] * channels_;//batch_size 28 = fm_size * this->channels_;
 
-    param[8] = height_ - kernel_h_;//height_kernel_h_ 32
-    param[9] = width_ - kernel_w_;//width_kernel_w_ 36
+    param[8] = height_ - kernel_h_;//height_kernel_h_ 32 = this->height_ - this->kernel_h_;
+    param[9] = width_ - kernel_w_;//width_kernel_w_ 36 = this->width_ - this->kernel_w_;
 
-    param[10] = param[8] + pad_h_;//height_kernel_h_pad_h_ 40
-    param[11] = param[9] + pad_w_;//width_kernel_w_pad_w_ 44
+    param[10] = param[8] + pad_h_;//height_kernel_h_pad_h_ 40 = height_kernel_h_ + this->pad_h_;
+    param[11] = param[9] + pad_w_;//width_kernel_w_pad_w_ 44 width_kernel_w_ + this->pad_w_;
 	
 	param[12] = stride_h_; //48
 	param[13] = stride_w_; //52
@@ -348,6 +333,37 @@ void PoolingLayer<float>::Forward_cpu(const vector<Blob<float>*>& bottom,
 	long long debug_long1;
 	float debug_float1;
 	float NEG_MIN = -FLT_MAX;
+	float tmp = 0.1;
+	LOG(INFO)<<"NEG_MIN="<<NEG_MIN;
+	//debug
+	printf("bottom_data:\n");
+	for (int n = 0; n < bottom[0]->num(); ++n) {
+      for (int c = 0; c < num_channels; ++c) {
+        for (int oh = 0; oh < height_; ++oh) {
+          for (int ow = 0; ow < width_; ++ow) {
+			index = n*param[7] + c*param[5] + oh * width_ + ow;
+			tmp += 0.1;
+			bottom_data[index] = tmp;
+			if(n==0 && c ==0) printf("%f ",tmp);
+		  }
+		  if(n==0 && c ==0) printf("\n");
+		}
+      }
+    }
+	printf("bottom_data_after init:\n");
+	for (int n = 0; n < bottom[0]->num(); ++n) {
+      for (int c = 0; c < num_channels; ++c) {
+        for (int oh = 0; oh < height_; ++oh) {
+          for (int ow = 0; ow < width_; ++ow) {
+			index = n*param[7] + c*param[5] + oh * width_ + ow;
+			if(n==0 && c ==0) printf("%f ",bottom_data[index]);
+		  }
+		  if(n==0 && c ==0) printf("\n");
+		}
+      }
+    }
+	float tmp_max[4000];
+	
     //之后可以把这两个循环拆成汇编，或者使用OpenMP优化
     for (int image = 0; image < bottom[0]->num(); ++image)
     {
@@ -356,7 +372,7 @@ void PoolingLayer<float>::Forward_cpu(const vector<Blob<float>*>& bottom,
             __asm__ __volatile__(
             
                 //input: 
-                //stack_bottom_data_ptr = bottom_data + fm_size*(layer->channels_*batch_start + channel_start)*8;//*4?*8?
+                //stack_bottom_data_ptr = bottom_data + fm_size*(layer->channels_*batch_start + channel_start)*4;//*4?*8?
 				"LDR w3, [%[param], #28]  \n\t" //batch_size=param[7]-x3
 				"LDR w4, [%[param], #20] \n\t"//fm_size=param[5]-x4
                 "MUL x5, x3, %[image]\n\t"
@@ -365,7 +381,7 @@ void PoolingLayer<float>::Forward_cpu(const vector<Blob<float>*>& bottom,
                 "ADD %[stack_bottom_data_ptr], %[bottom_data], x7, LSL #2\n\t"
                 
                 //output: 
-                //stack_top_data_ptr = top_data + pooled_fm_size*(layer->channels_*batch_start + channel_start)*8;
+                //stack_top_data_ptr = top_data + pooled_fm_size*(layer->channels_*batch_start + channel_start)*4;
 				"LDR w3, [%[param], #24]  \n\t" //pooled_batch_size=param[6]-x3
 				"LDR w4, [%[param], #16] \n\t"//pooled_fm_size=param[4]-x4
                 "MUL x5, x3, %[image]\n\t"
@@ -486,18 +502,12 @@ void PoolingLayer<float>::Forward_cpu(const vector<Blob<float>*>& bottom,
                             //align??
                                   
 							//这里可以精简一下寄存器的使用
-                            //"ADD x5, %[index], x9\n\t"        //x5=index+num_elements_to_do
-                            //"MOV x6, x10\n\t"                    //x6=effective_ptr
-                            //"MOV x7, %[index]\n\t"                            //x7=index
+                            "ADD x5, %[index], x9\n\t"        //x5=index+num_elements_to_do
+                            "MOV x6, x10\n\t"                    //x6=effective_ptr
+                            "MOV x7, %[index]\n\t"                            //x7=index
                             
-							"ADD x5, x10, x9, LSL #2 \n\t" //x5=adr(effective_ptr+num_elements_to_do*4)
-							"MOV x6, x10 \n\t"             //x6=effective_ptr
-							"MOV x7, %[index]\n\t"         //x7=index
-							
                                 // Iterate through kernel width.
                                 //循环条件：x7 < x5（index<num_elements_to_do）
-								//优化新的循环条件：不用index，用指针effective_ptr的临时寄存器x10位置
-								//x6 < x5
                             "loopw:\n\t"
                                 //align??
                                 //计算，使用压缩。。。
@@ -507,9 +517,10 @@ void PoolingLayer<float>::Forward_cpu(const vector<Blob<float>*>& bottom,
                                 "FCMP s0, %s[max_tmp]\n\t"
 								"FCSEL %s[max_tmp], s0, %s[max_tmp], GT \n\t"
 								"CSEL %[index_tmp], x7, %[index_tmp], GT \n\t"
-                                
+																
                                 "ADD x6, x6, #4\n\t"        //x6+=sizeof(float)
-								"CMP x6, x5 \n\t"
+								"ADD x7, x7, #1 \n\t"
+								"CMP x7, x5 \n\t"
 								
                                 "BLT loopw\n\t"
                                 //kernel_w loop end
@@ -534,11 +545,14 @@ void PoolingLayer<float>::Forward_cpu(const vector<Blob<float>*>& bottom,
                         //stack_top_data_ptr + pool_index(已经乘4了)  
                         "ADD x8, %[stack_top_data_ptr], %[pool_index]\n\t"
                         "STR %s[max_tmp], [x8]\n\t"
+						
+						"ADD x8, %[tmp_max], %[pool_index] \n\t"
+						"STR s0, [x8] \n\t"
                         
                         //保存结果到mask
                         //stack_top_mask_ptr + pool_index(已经乘4了) 
                         "ADD x8, %[stack_top_mask_ptr], %[pool_index]\n\t"
-                        "STR %[index_tmp], [x8]\n\t"
+                        "STR %w[index_tmp], [x8]\n\t"
                         
                         
                         //Update pool_index, pool_index += sizeof(float)?
@@ -563,7 +577,7 @@ void PoolingLayer<float>::Forward_cpu(const vector<Blob<float>*>& bottom,
 				[stack_bottom_data_ptr]"=&r"(stack_bottom_data_ptr), [stack_top_data_ptr]"=&r"(stack_top_data_ptr), [stack_top_mask_ptr]"=&r"(stack_top_mask_ptr)
 				//, [debug_int1]"=&r"(debug_int1), [debug_int2]"=&r"(debug_int2)
 				//, [debug_long1]"=&r"(debug_long1) 
-				//,[debug_float1]"=&w"(debug_float1)
+				,[debug_float1]"=&w"(debug_float1)
 				//[result]"=r"(result)
                 ://input
 				[param]"r"(param),
@@ -574,6 +588,7 @@ void PoolingLayer<float>::Forward_cpu(const vector<Blob<float>*>& bottom,
 				[hstart]"r"(hstart), [wstart0]"r"(wstart0), [hend]"r"(hend),  
 				[pool_index]"r"(pool_index), [index0]"r"(index0), [index]"r"(index), [index_tmp]"r"(index_tmp),
 				[NEG_MIN]"w"(NEG_MIN),
+				[tmp_max]"r"(tmp_max),
 				//[input]"m"(input),
 				//[pooled_width_const]"r"(pooled_width_const), [pooled_height_const]"r"(pooled_height_const), 
 				//[width_const]"r"(width_const), [height_const]"r"(height_const), 
@@ -589,24 +604,49 @@ void PoolingLayer<float>::Forward_cpu(const vector<Blob<float>*>& bottom,
 				:"x3", "x4", "x5", "x6", "x7", "x8", "x9", "x10", "s0", "memory", "cc",
 				"s1", "w11", "w12"
             );//不要忘记分号
-			
-        LOG(INFO)<<"----->>>>image="<<image<<", channel=<<"<<channel<<": "<<debug_float1<<"<<<<-----";
 		//LOG(INFO)<<"debug_int1="<<debug_int1;
 		//LOG(INFO)<<"debug_int2="<<debug_int2;
 		//LOG(INFO)<<"debug_float1="<<debug_float1;
 		//LOG(INFO)<<"debug_long1="<<debug_long1;
 		//LOG(INFO)<<"bottom_data="<<bottom_data;
-		LOG(INFO)<<"stack_bottom_data_ptr="<<stack_bottom_data_ptr;
+		//LOG(INFO)<<"stack_bottom_data_ptr="<<stack_bottom_data_ptr;
 		//LOG(INFO)<<"top_data="<<top_data;
-		LOG(INFO)<<"stack_top_data_ptr="<<stack_top_data_ptr;
+		//LOG(INFO)<<"stack_top_data_ptr="<<stack_top_data_ptr;
 		//LOG(INFO)<<"use_top_mask="<<use_top_mask;
-		if(use_top_mask) LOG(INFO)<<"top_mask="<<top_mask;
-		else LOG(INFO)<<"mask="<<mask;
-		LOG(INFO)<<"stack_top_mask_ptr="<<stack_top_mask_ptr;
-		
+		//if(use_top_mask) LOG(INFO)<<"top_mask="<<top_mask;
+		//else LOG(INFO)<<"mask="<<mask;
+		//LOG(INFO)<<"stack_top_mask_ptr="<<stack_top_mask_ptr;
+		if(image==0 && channel==0) {
+			printf("tmp_max:\n");
+			for (int plh = 0; plh < pooled_height_; ++plh) {
+			  for (int plw = 0; plw < pooled_width_; ++plw) {
+				pool_index = plh * pooled_width_ + plw;
+				printf("%f ",tmp_max[pool_index]);
+			  }
+			  printf("\n");
+			}
+
+			printf("topdata:\n");
+			for (int plh = 0; plh < pooled_height_; ++plh) {
+			  for (int plw = 0; plw < pooled_width_; ++plw) {
+				pool_index = plh * pooled_width_ + plw;
+				printf("%f ",top_data[pool_index]);
+			  }
+			  printf("\n");
+			}
+
+			printf("mask:\n");
+			for (int plh = 0; plh < pooled_height_; ++plh) {
+			  for (int plw = 0; plw < pooled_width_; ++plw) {
+				pool_index = plh * pooled_width_ + plw;
+				printf("%d ",mask[pool_index]);
+			  }
+			  printf("\n");
+			}
 		}
 		
-    }
+		}
+	}
     break;
   }
   case PoolingParameter_PoolMethod_AVE: {
