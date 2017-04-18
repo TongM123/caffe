@@ -369,9 +369,6 @@ void PoolingLayer<float>::Forward_cpu(const vector<Blob<float>*>& bottom,
 	float tmp_max[4000];
 	*/
     //之后可以把这两个循环拆成汇编，或者使用OpenMP优化
-#ifdef _OPENMP
-  #pragma omp parallel for collapse(2)
-#endif
     for (int image = 0; image < bottom[0]->num(); ++image)
     {
         for (int channel = 0; channel < num_channels; ++channel)
